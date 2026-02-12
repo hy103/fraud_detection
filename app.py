@@ -42,43 +42,72 @@ def health():
 
 @app.post("/score", response_model=ScoreResponse)
 async def score(req : ScoreRequest):
-    t0 = time.perf_counter()
-
-    try:
-        #Preprocessing
-        t1 = time.perf_counter()
-        x = np.array([[getattr(req, f) for f in feature_names]], dtype = float)
-        loop = asyncio.get_event_loop()
-        future = loop.create_future()
-        t2 = time.perf_counter()
-
-        #Inference
-        prob = float(model.predict_proba(x)[0,1])
-        t3 = time.perf_counter()
-
-        #Decision
-        decision = "approve"
-        if prob >= 0.8:
-            decision = "decline"
-        elif prob >= 0.5:
-            decision = "review"
-        t4 = time.perf_counter()
-
-    except Exception as e:
-        logger.exception("scoring failed")
-        raise HTTPException(status_code=500, detail="Scoring failed")
-
-    latency = {
-        "total_ms" : (t4-t0)*1000,
-        "preprocess_ms": (t2 - t1) * 1000,
-        "inference_ms": (t3 - t2) * 1000,
-        "postprocess_ms": (t4 - t3) * 1000,
-    }
-
-    #logger.info(f"score_request | tx_id = {req.transaction_id} | f"latency= {latency})
-    logger.info(f"score_request | tx_id={req.transaction_id} | "f"latency={latency}"
-    )
+    start_time = time.perf_counter()
 
 
+    #Preprocessing
+    t1 = time.perf_counter()
+    features = np.array([[getattr(req, f) for f in feature_names]], dtype = float)
+    loop = asyncio.get_event_loop()
+    future = loop.create_future()
 
-    return ScoreResponse(fraud_score=prob, decision=decision, latency_ms=latency)
+
+    while queue_lock :
+        queue.append((features, future, start_time))
+
+    result = await future
+    return result
+    
+# =========================
+# BATCH WORKER
+# =========================
+async def batch_worker():
+        while True:
+             await asyncio.sleep(0.005) #5ms polling
+
+             now = time.perf_counter()
+             batch = []
+
+             with queue_lock:
+                if not queue:
+                    continue
+                  
+                #flush if size is reached
+                if len(queue) >= BATCH_SIZE:
+                    batch = queue[:BATCH_SIZE]
+                    del queue[:BATCH_SIZE]
+                elif (now- queue[0][2])*1000 >= MAX_WAIT_MS:
+                     batch = queue[:]
+                     queue.clear()
+
+        if batch:
+            features_batch = np.vstack([item[0] for item in batch])
+            futures = [item[1] for item in batch]
+            start_times = [item[2] for item in batch]
+            t2 = time.perf_counter()
+
+            preds = model.predict_proba(features_batch)[:, 1]
+            t2 = time.perf_counter()
+
+            for prob, future, start_time in zip(probs, futures, start_times):
+                #Decision
+                decision = "approve"
+                if prob >= 0.8:
+                    decision = "decline"
+                elif prob >= 0.5:
+                    decision = "review"
+                t4 = time.perf_counter()
+
+                latency = {
+                    "total_ms" : (t4-start_time)*1000,
+                    "preprocess_ms": 0 * 1000,
+                    "inference_ms": (t3 - t2) * 1000/len(batch),
+                    "postprocess_ms": (t4 - t3) * 1000,
+                    }
+                future.set_result(
+            ScoreResponse(
+                fraud_score=float(prob),
+                decision=decision,
+                latency_ms=latency
+            )
+        )

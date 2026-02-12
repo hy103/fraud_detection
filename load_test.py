@@ -1,26 +1,56 @@
 import time
 import requests
 import statistics
+import httpx
+import numpy as np
+import asyncio
 
 URL = "http://127.0.0.1:8000/score"
 
-payload = {
-    "transaction_id": "tx123",
-    "user_id": "u1",
-    "amount": 1200,
-    "f0": 0.1, "f1": 0.2, "f2": 0.3, "f3": 0.4,
-    "f4": 0.5, "f5": 0.6, "f6": 0.7, "f7": 0.8
-}
+NUM_REQUESTS = 100
+CONCURRENT = 10
 
-latencies = []
 
-for _ in range(100):
+async def send_request(client, i):
+
+    payload = {
+        "transaction_id": "ftx_{i}",
+        "amount": float(np.random.rand() * 1000),
+        "user_id": f"user_{i}",
+        "feature_1": 0.2,
+        "feature_2": 0.5,
+        "feature_3": 0.8
+    }
+
     start = time.perf_counter()
-    r = requests.post(URL, json=payload)
+    r = await client.post(URL, json=payload)
+    latency = (time.perf_counter() - start)*1000
+    return latency
 
-    end = time.perf_counter()
+async def run_test():
+    semaphore = asyncio.Semaphore(10)
 
-    latencies.append((end-start)*1000)
+    async with httpx.AsyncClient() as client:
+        start = time.perf_counter()
 
-print("avg_ms:", statistics.mean(latencies))
-print("p95_ms:", statistics.quantiles(latencies, n=20)[18])
+        async def bounded_request(i):
+            async with semaphore:
+                return await send_request(client, i)
+
+        tasks = [bounded_request(i) for i in range(NUM_REQUESTS)]
+        latencies = await asyncio.gather(*tasks)
+
+        total_time = time.perf_counter() - start
+
+    p50 = np.percentile(latencies, 50)
+    p95 = np.percentile(latencies, 95)
+
+    print("Requests:", NUM_REQUESTS)
+    print("p50 ms:", round(p50, 2))
+    print("p95 ms:", round(p95, 2))
+    print("Throughput rps:", round(NUM_REQUESTS / total_time, 2))
+
+
+
+if __name__ == "__main__":
+    asyncio.run(run_test())
