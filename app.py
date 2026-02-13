@@ -51,7 +51,6 @@ async def score(req : ScoreRequest):
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
-
     while queue_lock :
         queue.append((features, future, start_time))
 
@@ -63,22 +62,22 @@ async def score(req : ScoreRequest):
 # =========================
 async def batch_worker():
         while True:
-             await asyncio.sleep(0.005) #5ms polling
+            await asyncio.sleep(0.005) #5ms polling
 
-             now = time.perf_counter()
-             batch = []
+            now = time.perf_counter()
+            batch = []
 
-             with queue_lock:
+            with queue_lock:
                 if not queue:
                     continue
-                  
-                #flush if size is reached
-                if len(queue) >= BATCH_SIZE:
-                    batch = queue[:BATCH_SIZE]
-                    del queue[:BATCH_SIZE]
-                elif (now- queue[0][2])*1000 >= MAX_WAIT_MS:
-                     batch = queue[:]
-                     queue.clear()
+                
+            #flush if size is reached
+            if len(queue) >= BATCH_SIZE:
+                batch = queue[:BATCH_SIZE]
+                del queue[:BATCH_SIZE]
+            elif (now- queue[0][2])*1000 >= MAX_WAIT_MS:
+                    batch = queue[:]
+                    queue.clear()
 
         if batch:
             features_batch = np.vstack([item[0] for item in batch])
