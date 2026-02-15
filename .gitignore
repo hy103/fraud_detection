@@ -157,6 +157,10 @@ Pipfile.lock
 package-lock.json
 yarn.lock
 
+#data files
+*.zip
+*.csv
+
 # ML/AI specific
 wandb/
 mlruns/
